@@ -181,7 +181,8 @@ export class ModelRuntime implements Models {
 	/** Virtual models by provider id, then model id. */
 	private readonly virtualModels = new Map<string, Map<string, RegisteredVirtualModel>>();
 	private readonly compositionErrors = new Map<string, string>();
-	private readonly modelsPath: string | undefined;
+	/** Resolved models.json path, or undefined when model configuration is disabled. */
+	readonly modelsPath: string | undefined;
 	private readonly modelNetworkEnabled: boolean;
 	private config: ModelConfig;
 	private snapshot: ModelRuntimeSnapshot = {
