@@ -1371,6 +1371,54 @@ if (result.aborted) console.log('refresh cancelled');
 for (const [provider, error] of result.errors) console.error(provider, error);
 ```
 
+### Auto-discovering Models from OpenAI-Compatible Endpoints
+
+Many OpenAI-compatible providers expose a `/models` endpoint that lists the models they serve. `createOpenAICompatibleModelFetcher()` builds a `fetchModels` implementation from that listing, so a provider only needs a base URL and a key instead of a hand-written model list:
+
+```typescript
+import { createModels, createProvider, envApiKeyAuth } from '@earendil-works/pi-ai';
+import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
+import { createOpenAICompatibleModelFetcher } from '@earendil-works/pi-ai/providers/openai-compatible-discovery';
+
+const customProxy = createProvider({
+  id: 'my-proxy',
+  name: 'My OpenAI-Compatible Proxy',
+  baseUrl: 'https://proxy.example.com/v1',
+  auth: { apiKey: envApiKeyAuth('Proxy API key', ['MY_PROXY_API_KEY']) },
+  models: [], // Models will be discovered dynamically
+  fetchModels: createOpenAICompatibleModelFetcher({
+    provider: 'my-proxy',
+    // Optional: keep a subset of the listed models
+    filter: (entry) => entry.id.includes('gpt') || entry.id.includes('llama'),
+    // Optional: metadata applied to every discovered model (endpoints report no metadata)
+    overrides: { contextWindow: 128000, maxTokens: 32000 },
+    // Optional: per-entry metadata, e.g. mark reasoning models
+    transform: (entry) => (entry.id.includes('o1') ? { reasoning: true } : undefined),
+    // Optional: compat settings for all discovered models
+    compat: {
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: false,
+      maxTokensField: 'max_tokens',
+    },
+  }),
+  api: openAICompletionsApi(),
+});
+
+const models = createModels();
+models.setProvider(customProxy);
+
+// Refresh to fetch and register models
+await models.refresh({ providers: ['my-proxy'] });
+
+// Now you can use the discovered models
+const model = models.getModel('my-proxy', 'gpt-4o');
+if (model) {
+  await models.completeSimple(model, { messages: [{ role: 'user', content: 'Hello!', timestamp: Date.now() }] });
+}
+```
+
+The listed helpers are usable on their own: `normalizeOpenAICompatibleBaseUrl()` turns a user-typed URL into the API base URL, `listOpenAICompatibleModels()` fetches the entries, and `openAICompatibleModelFromEntry()` builds one model. `coding-agent` uses them to add a custom endpoint from `/login`, writing the result to `models.json`.
+
 `Models.refresh()` is unbounded when its optional signal is omitted. Providers always receive a concrete `RefreshModelsContext.signal` and must honor it for network requests and other blocking work. When a caller supplies a signal, `Models.refresh()` returns promptly with `aborted: true` after cancellation even if a custom provider fails to cooperate; the provider must still honor the signal to stop its underlying work.
 
 Use `models.refresh({ providers: ['openrouter'] })` to restrict work to selected providers, `models.refresh({ allowNetwork: false })` to restore persisted catalogs without network access, or `models.refresh({ force: true })` to bypass provider freshness checks. Model reads stay synchronous and return the last restored or refreshed list.

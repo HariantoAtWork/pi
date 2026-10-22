@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added OpenAI-compatible model discovery: `createOpenAICompatibleModelFetcher()` builds a provider `fetchModels` from a `GET {baseUrl}/models` listing, with `listOpenAICompatibleModels()`, `openAICompatibleModelFromEntry()`, and `normalizeOpenAICompatibleBaseUrl()` for the individual steps.
+
 ### Fixed
 
 - Fixed Claude models that accept mid-conversation system messages rejecting a session with a 400 (`role 'system' must precede an 'assistant' message`) when a system update was followed by an assistant reply with nothing to send to Anthropic, such as an empty reply or another model's reasoning-only reply ([#11091](https://github.com/earendil-works/pi/issues/11091))
