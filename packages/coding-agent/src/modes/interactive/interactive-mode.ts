@@ -103,6 +103,7 @@ import {
 	resolveModelScopeFromModels,
 } from "../../core/model-resolver.ts";
 import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
+import { addOpenAICompatibleProvider, type OpenAICompatibleProviderPlan } from "../../core/openai-compatible-setup.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { RADIUS_MCP_URL, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
@@ -163,6 +164,7 @@ import {
 import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
+import { SearchableSelectorComponent } from "./components/searchable-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
@@ -5870,6 +5872,9 @@ export class InteractiveMode {
 		const availableAuthTypes = providerOptions
 			? new Set(providerOptions.map((provider) => provider.authType))
 			: new Set<AuthSelectorProvider["authType"]>(["oauth", "api_key"]);
+		// Adding a custom endpoint is offered from the top-level selector only, never when
+		// the caller already picked a provider.
+		const customEndpointLabel = providerOptions ? undefined : "Add an OpenAI-compatible endpoint";
 		const options: string[] = [];
 		if (availableAuthTypes.has("oauth")) {
 			options.push(subscriptionLabel);
@@ -5877,6 +5882,7 @@ export class InteractiveMode {
 		if (availableAuthTypes.has("api_key")) {
 			options.push(apiKeyLabel);
 		}
+		if (customEndpointLabel) options.push(customEndpointLabel);
 		if (radiusLabel) options.push(radiusLabel);
 
 		if (options.length === 0) {
@@ -5900,6 +5906,10 @@ export class InteractiveMode {
 				done();
 				if (radiusOption && option === radiusLabel) {
 					void this.startProviderLogin(radiusOption, () => this.showLoginAuthTypeSelector());
+					return;
+				}
+				if (customEndpointLabel && option === customEndpointLabel) {
+					this.showOpenAICompatibleSetup(() => this.showLoginAuthTypeSelector());
 					return;
 				}
 				const authType = option === subscriptionLabel ? "oauth" : "api_key";
@@ -5927,6 +5937,110 @@ export class InteractiveMode {
 							onCancel,
 						)
 					: new ExtensionSelectorComponent(title, options, onSelect, onCancel);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+		});
+	}
+
+	/** `/login` step 1 for a custom endpoint: ask for the base URL. */
+	private showOpenAICompatibleSetup(onCancel: () => void): void {
+		this.showSelector((done) => {
+			const input = new ExtensionInputComponent(
+				"OpenAI-compatible base URL",
+				undefined,
+				(value) => {
+					done();
+					const baseUrl = value.trim();
+					if (!baseUrl) {
+						onCancel();
+						return;
+					}
+					this.showOpenAICompatibleKeyPrompt(baseUrl, onCancel);
+				},
+				() => {
+					done();
+					onCancel();
+				},
+				{
+					tui: this.ui,
+					description: "For example: https://proxy.example.com/v1 or http://localhost:11434/v1",
+				},
+			);
+			return { component: input, focus: input };
+		});
+	}
+
+	/** `/login` step 2: the API key, empty for keyless local servers. */
+	private showOpenAICompatibleKeyPrompt(baseUrl: string, onCancel: () => void): void {
+		this.showSelector((done) => {
+			const input = new ExtensionInputComponent(
+				"API key (optional)",
+				undefined,
+				(value) => {
+					done();
+					void this.addOpenAICompatibleEndpoint(baseUrl, value.trim(), onCancel);
+				},
+				() => {
+					done();
+					onCancel();
+				},
+				{ tui: this.ui },
+			);
+			return { component: input, focus: input };
+		});
+	}
+
+	/** `/login` step 3: probe the endpoint, persist it to models.json, then pick the default model. */
+	private async addOpenAICompatibleEndpoint(baseUrl: string, apiKey: string, onCancel: () => void): Promise<void> {
+		const modelsPath = this.session.modelRuntime.modelsPath;
+		if (!modelsPath) {
+			this.showError("Model configuration is disabled, so no provider can be added.");
+			return;
+		}
+		try {
+			const plan = await addOpenAICompatibleProvider(modelsPath, {
+				baseUrl,
+				apiKey,
+				existingProviderIds: this.session.modelRuntime.getProviders().map((provider) => provider.id),
+			});
+			await this.session.modelRuntime.refresh({ providers: [plan.providerId], allowNetwork: false });
+			this.showOpenAICompatibleModelSelector(plan, onCancel);
+		} catch (error) {
+			this.showError(`Failed to add ${baseUrl}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/** `/login` step 4: pick which discovered model becomes the default. */
+	private showOpenAICompatibleModelSelector(plan: OpenAICompatibleProviderPlan, onCancel: () => void): void {
+		const keepCurrentLabel = "Keep the current model";
+		this.showSelector((done) => {
+			const onSelect = async (option: string) => {
+				done();
+				if (option === keepCurrentLabel) {
+					this.showStatus(`Added ${plan.providerId} with ${plan.modelIds.length} models.`);
+					return;
+				}
+				const model = this.session.modelRuntime.getModel(plan.providerId, option);
+				if (!model) {
+					this.showError(`Model ${plan.providerId}/${option} is not available.`);
+					return;
+				}
+				try {
+					await this.session.setModel(model, { persist: true });
+					this.showStatus(`Added ${plan.providerId}. Default model: ${model.provider}/${model.id}`);
+				} catch (error) {
+					this.showError(error instanceof Error ? error.message : String(error));
+				}
+			};
+			const selector = new SearchableSelectorComponent(
+				`Default model for ${plan.providerId}:`,
+				[...plan.modelIds, keepCurrentLabel],
+				onSelect,
+				() => {
+					done();
+					onCancel();
+				},
+				{ description: `Discovered ${plan.modelIds.length} models. Type to search.` },
+			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}

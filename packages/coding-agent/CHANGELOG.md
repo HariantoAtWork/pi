@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `/login` offers "Add an OpenAI-compatible endpoint": enter a base URL and optional key, fetch the served model list from the endpoint, save it as a `models.json` provider, and pick one of the discovered models as the default.
+
 ### Changed
 
 - `pi update` for installs from the pi.dev installer no longer passes `--min-release-age=0` to `npm ci`. The release lockfile pins every package, so the flag had no effect, and security scanners that block it stopped the update ([#11262](https://github.com/earendil-works/pi/issues/11262))

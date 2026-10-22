@@ -136,6 +136,34 @@ export type ModelsJsonModel = Static<typeof ModelDefinitionSchema>;
 export type ModelsJsonModelOverride = Static<typeof ModelOverrideSchema>;
 export type ModelsJsonProvider = Static<typeof ProviderConfigSchema>;
 
+/** Parsed models.json file. Written back verbatim by the models.json writer. */
+export interface ModelsJsonFile {
+	$schema?: string;
+	providers: Record<string, ModelsJsonProvider>;
+}
+
+/** Parse and validate models.json text, returning the file or the error `ModelConfig` would report. */
+export function parseModelsJson(content: string, path: string): { file?: ModelsJsonFile; error?: string } {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stripJsonComments(stripBom(content)));
+	} catch (error) {
+		return {
+			error: `Failed to parse models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
+		};
+	}
+	if (!validateModelsConfig.Check(parsed)) {
+		const errors =
+			validateModelsConfig
+				.Errors(parsed)
+				.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
+				.join("\n") || "Unknown schema error";
+		return { error: `Invalid models.json schema:\n${errors}\n\nFile: ${path}` };
+	}
+	const file = parsed as ModelsJsonFile;
+	return { file: { $schema: file.$schema, providers: file.providers ?? {} } };
+}
+
 function formatValidationPath(error: TLocalizedValidationError): string {
 	if (error.keyword === "required") {
 		const requiredProperties = (error.params as { requiredProperties?: string[] }).requiredProperties;
@@ -179,27 +207,11 @@ export class ModelConfig {
 			);
 		}
 
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(stripJsonComments(stripBom(content)));
-		} catch (error) {
-			return new ModelConfig(
-				new Map(),
-				`Failed to parse models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
-			);
-		}
-
-		if (!validateModelsConfig.Check(parsed)) {
-			const errors =
-				validateModelsConfig
-					.Errors(parsed)
-					.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
-					.join("\n") || "Unknown schema error";
-			return new ModelConfig(new Map(), `Invalid models.json schema:\n${errors}\n\nFile: ${path}`);
-		}
+		const parsed = parseModelsJson(content, path);
+		if (!parsed.file) return new ModelConfig(new Map(), parsed.error);
 
 		const providers = new Map<string, ModelsJsonProvider>();
-		for (const [providerId, provider] of Object.entries(parsed.providers)) {
+		for (const [providerId, provider] of Object.entries(parsed.file.providers)) {
 			providers.set(providerId, deepFreeze(structuredClone(provider)));
 		}
 		return new ModelConfig(providers);
